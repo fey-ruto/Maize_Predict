@@ -8,29 +8,74 @@ Original file is located at
 """
 
 import streamlit as st
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+import numpy as np
+from sklearn.preprocessing import StandardScaler
 
-# Define the Streamlit app
+# Load the datasets
+prices_weather_production_df = pd.read_csv('data/Food_Prices_Kenya.csv')
+counties_regions_df = pd.read_csv('data/Kenyan_Counties_with_Regions.csv')
+
+# Clean the Food_Prices_Kenya dataset
+prices_weather_production_df = prices_weather_production_df.loc[:, ~prices_weather_production_df.columns.str.contains('^Unnamed')]
+prices_weather_production_df = prices_weather_production_df.drop(0)
+prices_weather_production_df = prices_weather_production_df.dropna()
+
+# Merge the datasets
+merged_df = pd.merge(prices_weather_production_df, counties_regions_df, left_on='Regions', right_on='Region', how='left')
+merged_df = merged_df.drop(columns=['Region'])
+
+# Convert date-related columns to datetime format
+merged_df['Date'] = pd.to_datetime(merged_df['Date'], errors='coerce')
+merged_df['Year'] = merged_df['Date'].dt.year
+merged_df['Month'] = merged_df['Date'].dt.month
+
+# Replace commas in numeric columns and convert to numeric type
+for col in ['Price', 'Usdprice', 'Amount Produced', 'Annual Rainfall', 'Annual Temperature']:
+    merged_df[col] = merged_df[col].str.replace(',', '', regex=True).astype(float)
+
+# Load trained models
+price_model = load_model('models/price_model.h5')
+weather_model = load_model('models/weather_model.h5')
+
 def main():
     st.title("Maize Price and Weather Prediction in Kenya")
+    
+    # Load the regions and counties
+    regions = merged_df['Regions'].unique()
+    counties = merged_df['County'].unique()
 
+    # Select region and county
+    selected_region = st.selectbox("Select Region", regions)
+    selected_county = st.selectbox("Select County", counties)
+    
     # Input fields
     year = st.number_input('Year', min_value=2000, max_value=2100, step=1)
     month = st.number_input('Month', min_value=1, max_value=12, step=1)
-    amount_produced = st.number_input('Amount Produced (scaled)', min_value=-3.0, max_value=3.0, step=0.1)
-    annual_rainfall = st.number_input('Annual Rainfall (scaled)', min_value=-3.0, max_value=3.0, step=0.1)
-    annual_temperature = st.number_input('Annual Temperature (scaled)', min_value=-3.0, max_value=3.0, step=0.1)
-
+    
     # Predict button
     if st.button('Predict'):
+        # Filter the data for the selected county and region
+        county_region_data = merged_df[(merged_df['County'] == selected_county) & (merged_df['Regions'] == selected_region)]
+        
+        # Calculate mean values for the required features
+        mean_amount_produced = county_region_data['Amount Produced'].mean()
+        mean_annual_rainfall = county_region_data['Annual Rainfall'].mean()
+        mean_annual_temperature = county_region_data['Annual Temperature'].mean()
+
+        # Prepare the input data for prediction
+        input_data = np.array([[year, month, mean_amount_produced, mean_annual_rainfall, mean_annual_temperature]])
+
         # Predict maize price
-        price_prediction = price_model.predict([[year, month, amount_produced, annual_rainfall, annual_temperature]])
-        st.write(f'Predicted Maize Price: {price_prediction[0][0]}')
+        price_prediction = price_model.predict(input_data)
+        st.write(f'Predicted Maize Price for {selected_county} in {selected_region}: {price_prediction[0][0]}')
 
         # Predict weather
-        weather_prediction = weather_model.predict([[year, month]])
-        st.write(f'Predicted Annual Rainfall: {weather_prediction[0][0]}')
-        st.write(f'Predicted Annual Temperature: {weather_prediction[0][1]}')
+        weather_prediction = weather_model.predict(input_data[:, :2])
+        st.write(f'Predicted Annual Rainfall for {selected_county} in {selected_region}: {weather_prediction[0][0]}')
+        st.write(f'Predicted Annual Temperature for {selected_county} in {selected_region}: {weather_prediction[0][1]}')
 
-# Run the Streamlit app
 if __name__ == '__main__':
     main()
